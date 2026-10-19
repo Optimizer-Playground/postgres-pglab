@@ -587,6 +587,7 @@ DisableTimeoutParams
 DiscardMode
 DiscardStmt
 DistanceValue
+DistinctColInfo
 DistinctExpr
 DoStmt
 DocRepresentation
@@ -720,6 +721,7 @@ ExtensibleNodeEntry
 ExtensibleNodeMethods
 ExtensionControlFile
 ExtensionInfo
+ExtensionSiblingCache
 ExtensionVersionInfo
 FDWCollateState
 FD_SET
@@ -2160,6 +2162,7 @@ PsqlScanQuoteType
 PsqlScanResult
 PsqlScanState
 PsqlScanStateData
+PsqlScanStateSave
 PsqlSettings
 Publication
 PublicationActions
@@ -2782,6 +2785,7 @@ Tcl_Time
 TempNamespaceStatus
 TestDecodingData
 TestDecodingTxnData
+TestSlruSharedState
 TestSpec
 TextFreq
 TextPositionState
@@ -3627,6 +3631,7 @@ post_parse_analyze_hook_type
 postprocess_result_function
 pqbool
 pqsigfunc
+preprocess_subquery_phvs_context
 printQueryOpt
 printTableContent
 printTableFooter
@@ -3651,6 +3656,7 @@ pthread_mutex_t
 pthread_once_t
 pthread_t
 ptrdiff_t
+publication_tables_state
 published_rel
 pull_var_clause_context
 pull_varattnos_context

@@ -338,6 +338,9 @@ WalSndErrorCleanup(void)
 	if (xlogreader != NULL && xlogreader->seg.ws_file >= 0)
 		wal_segment_close(xlogreader);
 
+	xlogreader = NULL;
+	logical_decoding_ctx = NULL;
+
 	if (MyReplicationSlot != NULL)
 		ReplicationSlotRelease();
 
@@ -859,6 +862,9 @@ StartReplication(StartReplicationCmd *cmd)
 		Assert(streamingDoneSending && streamingDoneReceiving);
 	}
 
+	XLogReaderFree(xlogreader);
+	xlogreader = NULL;
+
 	if (cmd->slotname)
 		ReplicationSlotRelease();
 
@@ -941,7 +947,29 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 	am_cascading_walsender = RecoveryInProgress();
 
 	if (am_cascading_walsender)
-		GetXLogReplayRecPtr(&currTLI);
+	{
+		TimeLineID	insertTLI;
+
+		/*
+		 * If the insertion timeline has already been set, use it.
+		 * InsertTimeLineID is set before the WAL segments of the old timeline
+		 * are removed, before SharedRecoveryState switches to
+		 * RECOVERY_STATE_DONE.
+		 *
+		 * There is a window where RecoveryInProgress() still returns true but
+		 * the old timeline's WAL segments have already been removed or
+		 * recycled.  Using the WAL insertion timeline avoids attempting to
+		 * read from those removed segments, improving availability, and is a
+		 * safe thing to do as promotion copies the contents in the last
+		 * segment of the old timeline to the first segment of the new
+		 * timeline, up to the switchpoint.
+		 */
+		insertTLI = GetWALInsertionTimeLineIfSet();
+		if (insertTLI != 0)
+			currTLI = insertTLI;
+		else
+			GetXLogReplayRecPtr(&currTLI);
+	}
 	else
 		currTLI = GetWALInsertionTimeLine();
 
@@ -1341,6 +1369,8 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	WalSndLoop(XLogSendLogical);
 
 	FreeDecodingContext(logical_decoding_ctx);
+	logical_decoding_ctx = NULL;
+	xlogreader = NULL;
 	ReplicationSlotRelease();
 
 	replication_active = false;
@@ -1599,9 +1629,15 @@ WalSndWaitForWal(XLogRecPtr loc)
 		 * If we're shutting down, trigger pending WAL to be written out,
 		 * otherwise we'd possibly end up waiting for WAL that never gets
 		 * written, because walwriter has shut down already.
+		 *
+		 * Note that GetXLogInsertEndRecPtr() is used to obtain the WAL flush
+		 * request location instead of GetXLogInsertRecPtr(). Because if the
+		 * last WAL record ends at a page boundary, GetXLogInsertRecPtr() can
+		 * return an LSN pointing past the page header, which may cause
+		 * XLogFlush() to report an error.
 		 */
-		if (got_STOPPING)
-			XLogBackgroundFlush();
+		if (got_STOPPING && !RecoveryInProgress())
+			XLogFlush(GetXLogInsertEndRecPtr());
 
 		/* Update our idea of the currently flushed position. */
 		if (!RecoveryInProgress())
@@ -1730,6 +1766,9 @@ exec_replication_command(const char *cmd_string)
 	SnapBuildClearExportedSnapshot();
 
 	CHECK_FOR_INTERRUPTS();
+
+	Assert(xlogreader == NULL);
+	Assert(logical_decoding_ctx == NULL);
 
 	/*
 	 * Prepare to parse and execute the command.
@@ -1864,7 +1903,6 @@ exec_replication_command(const char *cmd_string)
 				/* dupe, but necessary per libpqrcv_endstreaming */
 				EndReplicationCommand(cmdtag);
 
-				Assert(xlogreader != NULL);
 				break;
 			}
 
@@ -2109,7 +2147,9 @@ ProcessStandbyReplyMessage(void)
 	TimestampTz now;
 	TimestampTz replyTime;
 
-	static bool fullyAppliedLastTime = false;
+	static XLogRecPtr prevWritePtr = InvalidXLogRecPtr;
+	static XLogRecPtr prevFlushPtr = InvalidXLogRecPtr;
+	static XLogRecPtr prevApplyPtr = InvalidXLogRecPtr;
 
 	/* the caller already consumed the msgtype byte */
 	writePtr = pq_getmsgint64(&reply_message);
@@ -2142,22 +2182,23 @@ ProcessStandbyReplyMessage(void)
 	applyLag = LagTrackerRead(SYNC_REP_WAIT_APPLY, applyPtr, now);
 
 	/*
-	 * If the standby reports that it has fully replayed the WAL in two
-	 * consecutive reply messages, then the second such message must result
-	 * from wal_receiver_status_interval expiring on the standby.  This is a
-	 * convenient time to forget the lag times measured when it last
-	 * wrote/flushed/applied a WAL record, to avoid displaying stale lag data
-	 * until more WAL traffic arrives.
+	 * If the standby reports that it has fully replayed the WAL, and the
+	 * write/flush/apply positions remain unchanged across two consecutive
+	 * reply messages, forget the lag times measured when it last
+	 * wrote/flushed/applied a WAL record.
+	 *
+	 * The second message with unchanged positions typically results from
+	 * wal_receiver_status_interval expiring on the standby, so lag values are
+	 * usually cleared after that interval when there is no activity. This
+	 * avoids displaying stale lag data until more WAL traffic arrives.
 	 */
-	clearLagTimes = false;
-	if (applyPtr == sentPtr)
-	{
-		if (fullyAppliedLastTime)
-			clearLagTimes = true;
-		fullyAppliedLastTime = true;
-	}
-	else
-		fullyAppliedLastTime = false;
+	clearLagTimes = (applyPtr == sentPtr && flushPtr == sentPtr &&
+					 writePtr == prevWritePtr && flushPtr == prevFlushPtr &&
+					 applyPtr == prevApplyPtr);
+
+	prevWritePtr = writePtr;
+	prevFlushPtr = flushPtr;
+	prevApplyPtr = applyPtr;
 
 	/* Send a reply if the standby requested one. */
 	if (replyRequested)

@@ -18,6 +18,67 @@
 # Be sure to replace "<ADD JUSTIFICATION HERE>" with details of your change and
 # why it is deemed acceptable.
 
+ff5ba5f198a7efa362059458e2169f83bb2b7d75
+#
+# Reorderbuffer: handle catalog-change-bearing aborted subxacts better
+# Wed Oct 14 19:42:04 2026 +0200
+#
+# ReorderBufferAddNewTupleCids()'s signature changes and struct
+# ReorderBufferChange gains a field, but no known third-party calls the
+# former or constructs the latter.
+
+2389f898eea60b445191b1bcaafada29781ab9dc
+#
+# Fix tuple search during apply after concurrent index DDL.
+# 2026-09-28 06:52:24 -0400
+#
+# LogicalRepRelMapEntry gains a bool field in existing alignment padding,
+# so existing member offsets and sizeof(LogicalRepRelMapEntry) remain unchanged.
+
+986870baa06bc70245ee731d83486d4ed529c223
+#
+# Perform join removal by editing the query's jointree.
+# 2026-08-28 15:12:26 -0400
+#
+# remove_useless_joins (now remove_useless_outer_joins) and
+# reduce_unique_semijoins have changed behavior and return types.
+# I am unaware of any impacted third-party code; if there is any,
+# it is probably vulnerable to the same bugs this patch is fixing.
+
+7ce056b1798b81a287ae00e2c06f210fd0e59be2
+#
+# Check for USAGE privilege on types used by stored expressions.
+# 2026-08-10 06:38:24 -0700
+#
+# The addition of a parameter to AlterDomainAddConstraint() breaks ABI
+# compatibility, but we are unaware of any impacted third-party code.
+
+4e1252ee56c33b8a1144b25b5803f47276662519
+#
+# Add an output_plugin_libraries GUC to bless trusted output plugins
+# 2026-08-10 06:38:24 -0700
+#
+# Addition of a new GUC enlarges ConfigureNamesString[],
+# but that is not harmful.
+
+7c3367ab5dc42c34788cf9a4c768d46d4acf1041
+#
+# Preserve the owner of extended statistics rebuilt by ALTER TABLE.
+# 2026-08-10 06:38:24 -0700
+#
+# CreateStatistics()'s signature changes and CreateStatsStmt gains a field,
+# but no known third-party code calls the former or constructs the latter.
+
+e37b598028469d260650e5e1671c8275d30e22b6
+#
+# Add file_extend_method=posix_fallocate,write_zeros.
+# 2026-02-06 17:43:49 +1300
+#
+# Modifying GUC tables isn't really an ABI break: the relevant object has
+# incomplete type so its layout is unknown to other C translation units.
+#
+# Discussion: https://www.postgresql.org/message-id/flat/e1f0cd3b-0164-45f5-9705-e922e59df90f%40dunslane.net#8a350b54012c0042f9869d288e978cfe
+
 e7391bbf14db94afee1fd3c011314f7b8ee493e9
 #
 # Fix trigger transition table capture for MERGE in CTE queries.
