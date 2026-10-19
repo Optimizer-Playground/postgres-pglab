@@ -1003,8 +1003,8 @@ static const SchemaQuery Query_for_trigger_of_table = {
 #define Query_for_list_of_database_vars \
 "SELECT conf FROM ("\
 "       SELECT setdatabase, pg_catalog.split_part(pg_catalog.unnest(setconfig),'=',1) conf"\
-"         FROM pg_db_role_setting "\
-"       ) s, pg_database d "\
+"         FROM pg_catalog.pg_db_role_setting "\
+"       ) s, pg_catalog.pg_database d "\
 " WHERE s.setdatabase = d.oid "\
 "   AND conf LIKE '%s'"\
 "   AND d.datname LIKE '%s'"
@@ -5300,7 +5300,7 @@ match_previous_words(int pattern_id,
 	else if (TailMatchesCS("\\dew*"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_fdws);
 	else if (TailMatchesCS("\\df*"))
-		COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_functions);
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_routines);
 	else if (HeadMatchesCS("\\df*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes);
 

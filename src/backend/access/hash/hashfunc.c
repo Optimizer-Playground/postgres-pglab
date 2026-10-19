@@ -27,6 +27,7 @@
 #include "postgres.h"
 
 #include "common/hashfn.h"
+#include "utils/builtins.h"
 #include "utils/float.h"
 #include "utils/fmgrprotos.h"
 #include "utils/pg_locale.h"
@@ -233,6 +234,7 @@ hashoidvector(PG_FUNCTION_ARGS)
 {
 	oidvector  *key = (oidvector *) PG_GETARG_POINTER(0);
 
+	check_valid_oidvector(key);
 	return hash_any((unsigned char *) key->values, key->dim1 * sizeof(Oid));
 }
 
@@ -241,6 +243,7 @@ hashoidvectorextended(PG_FUNCTION_ARGS)
 {
 	oidvector  *key = (oidvector *) PG_GETARG_POINTER(0);
 
+	check_valid_oidvector(key);
 	return hash_any_extended((unsigned char *) key->values,
 							 key->dim1 * sizeof(Oid),
 							 PG_GETARG_INT64(1));
@@ -307,7 +310,7 @@ hashtext(PG_FUNCTION_ARGS)
 		 * character in the hash, but it was done before and the behavior must
 		 * be preserved.
 		 */
-		result = hash_any((uint8_t *) buf, bsize + 1);
+		result = hash_any((uint8_t *) buf, rsize + 1);
 
 		pfree(buf);
 	}
@@ -362,7 +365,7 @@ hashtextextended(PG_FUNCTION_ARGS)
 		 * character in the hash, but it was done before and the behavior must
 		 * be preserved.
 		 */
-		result = hash_any_extended((uint8_t *) buf, bsize + 1,
+		result = hash_any_extended((uint8_t *) buf, rsize + 1,
 								   PG_GETARG_INT64(1));
 
 		pfree(buf);

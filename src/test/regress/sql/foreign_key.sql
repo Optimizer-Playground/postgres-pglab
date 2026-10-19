@@ -521,7 +521,7 @@ CREATE TABLE FKTABLE (
   FOREIGN KEY (tid, fk_id_del_set_default) REFERENCES PKTABLE ON DELETE SET DEFAULT (fk_id_del_set_default, fk_id_del_set_default)
 );
 
-SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fktable'::regclass::oid ORDER BY oid;
+SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fktable'::regclass::oid ORDER BY conname COLLATE "C";
 
 INSERT INTO PKTABLE VALUES (1, 0), (1, 1), (1, 2);
 INSERT INTO FKTABLE VALUES
@@ -782,6 +782,43 @@ SET CONSTRAINTS ALL IMMEDIATE;
 -- should fail
 INSERT INTO fktable VALUES (500, 1000);
 
+COMMIT;
+
+-- Check that the existing FK trigger is both deferrable and initially deferred
+SELECT conname, tgrelid::regclass as tgrel,
+       regexp_replace(tgname, '[0-9]+', 'N') as tgname, tgtype,
+       tgdeferrable, tginitdeferred
+FROM pg_trigger t JOIN pg_constraint c ON (t.tgconstraint = c.oid)
+WHERE conrelid = 'fktable'::regclass AND conname = 'fktable_fk_fkey'
+ORDER BY tgrelid, tgtype;
+
+-- Changing the constraint to NOT ENFORCED drops the associated FK triggers
+ALTER TABLE FKTABLE ALTER CONSTRAINT fktable_fk_fkey NOT ENFORCED;
+SELECT conname, tgrelid::regclass as tgrel,
+       regexp_replace(tgname, '[0-9]+', 'N') as tgname, tgtype,
+       tgdeferrable, tginitdeferred
+FROM pg_trigger t JOIN pg_constraint c ON (t.tgconstraint = c.oid)
+WHERE conrelid = 'fktable'::regclass AND conname = 'fktable_fk_fkey'
+ORDER BY tgrelid, tgtype;
+
+-- Changing it back to ENFORCED will recreate the necessary FK triggers
+-- that are deferrable and initially deferred
+ALTER TABLE FKTABLE ALTER CONSTRAINT fktable_fk_fkey ENFORCED;
+SELECT conname, tgrelid::regclass as tgrel,
+       regexp_replace(tgname, '[0-9]+', 'N') as tgname, tgtype,
+       tgdeferrable, tginitdeferred
+FROM pg_trigger t JOIN pg_constraint c ON (t.tgconstraint = c.oid)
+WHERE conrelid = 'fktable'::regclass AND conname = 'fktable_fk_fkey'
+ORDER BY tgrelid, tgtype;
+
+-- Verify that a deferrable, initially deferred foreign key still works
+-- as expected after being set to NOT ENFORCED and then re-enabled
+BEGIN;
+
+-- doesn't match PK, but no error yet
+INSERT INTO fktable VALUES (2, 20);
+
+-- should catch error from INSERT at commit
 COMMIT;
 
 DROP TABLE fktable, pktable;
@@ -1348,14 +1385,14 @@ ALTER TABLE fk_partitioned_fk ATTACH PARTITION fk_partitioned_fk_1 FOR VALUES FR
 
 -- Child constraint will remain valid.
 SELECT conname, convalidated, conrelid::regclass FROM pg_constraint
-WHERE conrelid::regclass::text like 'fk_partitioned_fk%' ORDER BY oid::regclass::text;
+WHERE conrelid::regclass::text like 'fk_partitioned_fk%' ORDER BY conname COLLATE "C";
 
 -- Validate the constraint
 ALTER TABLE fk_partitioned_fk VALIDATE CONSTRAINT fk_partitioned_fk_a_b_fkey;
 
 -- All constraints are now valid.
 SELECT conname, convalidated, conrelid::regclass FROM pg_constraint
-WHERE conrelid::regclass::text like 'fk_partitioned_fk%' ORDER BY oid::regclass::text;
+WHERE conrelid::regclass::text like 'fk_partitioned_fk%' ORDER BY conname COLLATE "C";
 
 -- Attaching a child with a NOT VALID constraint.
 CREATE TABLE fk_partitioned_fk_2 (a int, b int);
@@ -1371,7 +1408,7 @@ ALTER TABLE fk_partitioned_fk ATTACH PARTITION fk_partitioned_fk_2 FOR VALUES FR
 
 -- The child constraint will also be valid.
 SELECT conname, convalidated FROM pg_constraint
-WHERE conrelid = 'fk_partitioned_fk_2'::regclass ORDER BY oid::regclass::text;
+WHERE conrelid = 'fk_partitioned_fk_2'::regclass ORDER BY conname COLLATE "C";
 
 -- Test case where the child constraint is invalid, the grandchild constraint
 -- is valid, and the validation for the grandchild should be skipped when a
@@ -1385,7 +1422,7 @@ ALTER TABLE fk_partitioned_fk ATTACH PARTITION fk_partitioned_fk_3 FOR VALUES FR
 
 -- All constraints are now valid.
 SELECT conname, convalidated, conrelid::regclass FROM pg_constraint
-WHERE conrelid::regclass::text like 'fk_partitioned_fk%' ORDER BY oid::regclass::text;
+WHERE conrelid::regclass::text like 'fk_partitioned_fk%' ORDER BY conname COLLATE "C";
 
 DROP TABLE fk_partitioned_fk, fk_notpartitioned_pk;
 
@@ -1404,14 +1441,14 @@ ALTER TABLE fk_notpartitioned_fk ADD CONSTRAINT fk_notpartitioned_fk_a_b_fkey2
 
 -- All constraints will be invalid, and _fkey2 constraints will not be enforced.
 SELECT conname, conenforced, convalidated FROM pg_constraint
-WHERE conrelid = 'fk_notpartitioned_fk'::regclass ORDER BY oid::regclass::text;
+WHERE conrelid = 'fk_notpartitioned_fk'::regclass ORDER BY conname COLLATE "C";
 
 ALTER TABLE fk_notpartitioned_fk VALIDATE CONSTRAINT fk_notpartitioned_fk_a_b_fkey;
 ALTER TABLE fk_notpartitioned_fk ALTER CONSTRAINT fk_notpartitioned_fk_a_b_fkey2 ENFORCED;
 
 -- All constraints are now valid and enforced.
 SELECT conname, conenforced, convalidated FROM pg_constraint
-WHERE conrelid = 'fk_notpartitioned_fk'::regclass ORDER BY oid::regclass::text;
+WHERE conrelid = 'fk_notpartitioned_fk'::regclass ORDER BY conname COLLATE "C";
 
 -- test a self-referential FK
 ALTER TABLE fk_partitioned_pk ADD CONSTRAINT selffk FOREIGN KEY (a, b) REFERENCES fk_partitioned_pk NOT VALID;
@@ -1420,12 +1457,12 @@ CREATE TABLE fk_partitioned_pk_3 PARTITION OF fk_partitioned_pk FOR VALUES FROM 
 CREATE TABLE fk_partitioned_pk_3_1 PARTITION OF fk_partitioned_pk_3 FOR VALUES FROM (2000) TO (2100);
 SELECT conname, conenforced, convalidated FROM pg_constraint
 WHERE conrelid = 'fk_partitioned_pk'::regclass AND contype = 'f'
-ORDER BY oid::regclass::text;
+ORDER BY conname COLLATE "C";
 ALTER TABLE fk_partitioned_pk_2 VALIDATE CONSTRAINT selffk;
 ALTER TABLE fk_partitioned_pk VALIDATE CONSTRAINT selffk;
 SELECT conname, conenforced, convalidated FROM pg_constraint
 WHERE conrelid = 'fk_partitioned_pk'::regclass AND contype = 'f'
-ORDER BY oid::regclass::text;
+ORDER BY conname COLLATE "C";
 
 DROP TABLE fk_notpartitioned_fk, fk_partitioned_pk;
 

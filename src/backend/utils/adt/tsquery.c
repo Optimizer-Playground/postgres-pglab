@@ -120,7 +120,7 @@ get_modifiers(char *buf, int16 *weight, bool *prefix)
 		return buf;
 
 	buf++;
-	while (*buf && pg_mblen(buf) == 1)
+	while (*buf && pg_mblen_cstr(buf) == 1)
 	{
 		switch (*buf)
 		{
@@ -259,12 +259,12 @@ parse_or_operator(TSQueryParserState pstate)
 		return false;
 
 	/* it shouldn't be a part of any word */
-	if (t_iseq(ptr, '-') || t_iseq(ptr, '_') || t_isalnum(ptr))
+	if (t_iseq(ptr, '-') || t_iseq(ptr, '_') || t_isalnum_cstr(ptr))
 		return false;
 
 	for (;;)
 	{
-		ptr += pg_mblen(ptr);
+		ptr += pg_mblen_cstr(ptr);
 
 		if (*ptr == '\0')		/* got end of string without operand */
 			return false;
@@ -390,7 +390,7 @@ gettoken_query_standard(TSQueryParserState state, int8 *operator,
 				break;
 		}
 
-		state->buf += pg_mblen(state->buf);
+		state->buf += pg_mblen_cstr(state->buf);
 	}
 }
 
@@ -502,7 +502,7 @@ gettoken_query_websearch(TSQueryParserState state, int8 *operator,
 				break;
 		}
 
-		state->buf += pg_mblen(state->buf);
+		state->buf += pg_mblen_cstr(state->buf);
 	}
 }
 
@@ -548,12 +548,12 @@ pushValue_internal(TSQueryParserState state, pg_crc32 valcrc, int distance, int 
 {
 	QueryOperand *tmp;
 
-	if (distance >= MAXSTRPOS)
+	if (distance > MAXSTRPOS)
 		ereturn(state->escontext,,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("value is too big in tsquery: \"%s\"",
 						state->buffer)));
-	if (lenval >= MAXSTRLEN)
+	if (lenval > MAXSTRLEN)
 		ereturn(state->escontext,,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("operand is too long in tsquery: \"%s\"",
@@ -581,7 +581,7 @@ pushValue(TSQueryParserState state, char *strval, int lenval, int16 weight, bool
 {
 	pg_crc32	valcrc;
 
-	if (lenval >= MAXSTRLEN)
+	if (lenval > MAXSTRLEN)
 		ereturn(state->escontext,,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("word is too long in tsquery: \"%s\"",
@@ -633,10 +633,14 @@ typedef struct OperatorElement
 } OperatorElement;
 
 static void
-pushOpStack(OperatorElement *stack, int *lenstack, int8 op, int16 distance)
+pushOpStack(TSQueryParserState state,
+			OperatorElement *stack, int *lenstack,
+			int8 op, int16 distance)
 {
-	if (*lenstack == STACKDEPTH)	/* internal error */
-		elog(ERROR, "tsquery stack too small");
+	if (*lenstack >= STACKDEPTH)
+		ereturn(state->escontext,,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("tsquery is too complex")));
 
 	stack[*lenstack].op = op;
 	stack[*lenstack].distance = distance;
@@ -696,7 +700,7 @@ makepol(TSQueryParserState state,
 				break;
 			case PT_OPR:
 				cleanOpStack(state, opstack, &lenstack, operator);
-				pushOpStack(opstack, &lenstack, operator, weight);
+				pushOpStack(state, opstack, &lenstack, operator, weight);
 				break;
 			case PT_OPEN:
 				makepol(state, pushval, opaque);
@@ -714,7 +718,7 @@ makepol(TSQueryParserState state,
 									state->buffer)));
 				return;
 		}
-		/* detect soft error in pushval or recursion */
+		/* detect soft error in pushval, pushOpStack, or recursion */
 		if (SOFT_ERROR_OCCURRED(state->escontext))
 			return;
 	}
@@ -1014,9 +1018,8 @@ infix(INFIX *in, int parentPriority, bool rightPhraseOp)
 				*(in->cur) = '\\';
 				in->cur++;
 			}
-			COPYCHAR(in->cur, op);
 
-			clen = pg_mblen(op);
+			clen = ts_copychar_cstr(in->cur, op);
 			op += clen;
 			in->cur += clen;
 		}
@@ -1274,6 +1277,9 @@ tsqueryrecv(PG_FUNCTION_ARGS)
 			if (weight > 0xF)
 				elog(ERROR, "invalid tsquery: invalid weight bitmap");
 
+			if (val_len == 0)
+				elog(ERROR, "invalid tsquery: empty operand");
+
 			if (val_len > MAXSTRLEN)
 				elog(ERROR, "invalid tsquery: operand too long");
 
@@ -1313,7 +1319,14 @@ tsqueryrecv(PG_FUNCTION_ARGS)
 
 			item->qoperator.oper = oper;
 			if (oper == OP_PHRASE)
-				item->qoperator.distance = (int16) pq_getmsgint(buf, sizeof(int16));
+			{
+				unsigned int dist = pq_getmsgint(buf, sizeof(int16));
+
+				if (dist > MAXENTRYPOS)
+					elog(ERROR, "invalid tsquery: invalid phrase distance %u",
+						 dist);
+				item->qoperator.distance = (int16) dist;
+			}
 		}
 		else
 			elog(ERROR, "unrecognized tsquery node type: %d", item->type);

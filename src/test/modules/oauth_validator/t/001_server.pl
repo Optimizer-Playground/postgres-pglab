@@ -96,6 +96,22 @@ is( $contents,
 3|oauth|\{issuer=$issuer/param,"scope=openid postgres",validator=validator\}},
 	"pg_hba_file_rules recreates OAuth HBA settings");
 
+# An all-whitespace library list parses as an empty list.  Reject it without
+# crashing the postmaster during HBA reload.
+$node->append_conf('postgresql.conf', "oauth_validator_libraries = '   '");
+$node->reload;
+$log_start = $node->wait_for_log(
+	qr/oauth_validator_libraries must be set for authentication/,
+	$log_start);
+$bgconn->query_safe('SELECT 1');
+
+$node->append_conf('postgresql.conf',
+	"oauth_validator_libraries = 'validator'");
+$node->reload;
+$log_start = $node->wait_for_log(
+	qr/parameter "oauth_validator_libraries" changed to "validator"/,
+	$log_start);
+
 # To test against HTTP rather than HTTPS, we need to enable PGOAUTHDEBUG. But
 # first, check to make sure the client refuses such connections by default.
 $node->connect_fails(
@@ -436,15 +452,28 @@ like(
 	qr@Visit https://example\.com/ and enter the code: postgresuser@,
 	"call count: stderr matches");
 
-my $count_pattern = qr/\[libpq\] total number of polls: (\d+)/;
-if (like($stderr, $count_pattern, "call count: count is printed"))
+SKIP:
 {
-	# For reference, a typical flow with two retries might take between 5-15
-	# calls to the client implementation. And while this will probably continue
-	# to change across OSes and Curl updates, we're likely in trouble if we see
-	# hundreds or thousands of calls.
-	$stderr =~ $count_pattern;
-	cmp_ok($1, '<', 100, "call count is reasonably small");
+	# Curl 8.20.0 regressed this test case:
+	#
+	#     https://github.com/curl/curl/issues/21547
+	#
+	skip 'call-count test is known to fail with libcurl 8.20.0', 2
+	  if $stderr =~ m/\Qinitialized libcurl 8.20.0\E/;
+
+	my $count_pattern = qr/\[libpq\] total number of polls: (\d+)/;
+	if (like($stderr, $count_pattern, "call count: count is printed"))
+	{
+		# For reference, a typical flow with two retries might take between 5-15
+		# calls to the client implementation. And while this will probably
+		# continue to change across OSes and Curl updates, we're likely in
+		# trouble if we see hundreds or thousands of calls.
+		$stderr =~ $count_pattern;
+		unless (cmp_ok($1, '<', 100, "call count is reasonably small"))
+		{
+			diag "full stderr:\n$stderr";
+		}
+	}
 }
 
 # Stress test: make sure our builtin flow operates correctly even if the client

@@ -6725,12 +6725,8 @@ getAggregates(Archive *fout)
 		if (agginfo[i].aggfn.nargs == 0)
 			agginfo[i].aggfn.argtypes = NULL;
 		else
-		{
-			agginfo[i].aggfn.argtypes = (Oid *) pg_malloc(agginfo[i].aggfn.nargs * sizeof(Oid));
-			parseOidArray(PQgetvalue(res, i, i_proargtypes),
-						  agginfo[i].aggfn.argtypes,
-						  agginfo[i].aggfn.nargs);
-		}
+			agginfo[i].aggfn.argtypes = parseOidArray(PQgetvalue(res, i, i_proargtypes),
+													  agginfo[i].aggfn.nargs);
 		agginfo[i].aggfn.postponed_def = false; /* might get set during sort */
 
 		/* Decide whether we want to dump it */
@@ -6918,11 +6914,8 @@ getFuncs(Archive *fout)
 		if (finfo[i].nargs == 0)
 			finfo[i].argtypes = NULL;
 		else
-		{
-			finfo[i].argtypes = (Oid *) pg_malloc(finfo[i].nargs * sizeof(Oid));
-			parseOidArray(PQgetvalue(res, i, i_proargtypes),
-						  finfo[i].argtypes, finfo[i].nargs);
-		}
+			finfo[i].argtypes = parseOidArray(PQgetvalue(res, i, i_proargtypes),
+											  finfo[i].nargs);
 		finfo[i].postponed_def = false; /* might get set during sort */
 
 		/* Decide whether we want to dump it */
@@ -7908,8 +7901,6 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 	{
 		Oid			indrelid = atooid(PQgetvalue(res, j, i_indrelid));
 		TableInfo  *tbinfo = NULL;
-		char	  **indAttNames = NULL;
-		int			nindAttNames = 0;
 		int			numinds;
 
 		/* Count rows for this table */
@@ -7943,6 +7934,8 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 		{
 			char		contype;
 			char		indexkind;
+			char	  **indAttNames = NULL;
+			int			nindAttNames = 0;
 			RelStatsInfo *relstats;
 			int32		relpages = atoi(PQgetvalue(res, j, i_relpages));
 			int32		relallvisible = atoi(PQgetvalue(res, j, i_relallvisible));
@@ -7963,9 +7956,8 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 			indxinfo[j].indreloptions = pg_strdup(PQgetvalue(res, j, i_indreloptions));
 			indxinfo[j].indstatcols = pg_strdup(PQgetvalue(res, j, i_indstatcols));
 			indxinfo[j].indstatvals = pg_strdup(PQgetvalue(res, j, i_indstatvals));
-			indxinfo[j].indkeys = (Oid *) pg_malloc(indxinfo[j].indnattrs * sizeof(Oid));
-			parseOidArray(PQgetvalue(res, j, i_indkey),
-						  indxinfo[j].indkeys, indxinfo[j].indnattrs);
+			indxinfo[j].indkeys = parseIntArray(PQgetvalue(res, j, i_indkey),
+												indxinfo[j].indnattrs);
 			indxinfo[j].indisclustered = (PQgetvalue(res, j, i_indisclustered)[0] == 't');
 			indxinfo[j].indisreplident = (PQgetvalue(res, j, i_indisreplident)[0] == 't');
 			indxinfo[j].indnullsnotdistinct = (PQgetvalue(res, j, i_indnullsnotdistinct)[0] == 't');
@@ -9916,7 +9908,7 @@ determineNotNullFlags(Archive *fout, PGresult *res, int r,
 			 */
 			if ((dopt->binary_upgrade &&
 				 !tbinfo->ispartition &&
-				 !tbinfo->notnull_islocal) ||
+				 !tbinfo->notnull_islocal[j]) ||
 				!PQgetisnull(res, r, i_notnull_comment))
 			{
 				tbinfo->notnull_constrs[j] =
@@ -13509,12 +13501,10 @@ dumpFunc(Archive *fout, const FuncInfo *finfo)
 
 	if (*protrftypes)
 	{
-		Oid		   *typeids = pg_malloc(FUNC_MAX_ARGS * sizeof(Oid));
-		int			i;
+		Oid		   *typeids = parseOidArray(protrftypes, -1);
 
 		appendPQExpBufferStr(q, " TRANSFORM ");
-		parseOidArray(protrftypes, typeids, FUNC_MAX_ARGS);
-		for (i = 0; typeids[i]; i++)
+		for (int i = 0; typeids[i]; i++)
 		{
 			if (i != 0)
 				appendPQExpBufferStr(q, ", ");
@@ -17230,6 +17220,9 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 						appendPQExpBuffer(q, "CONSTRAINT %s NOT NULL %s",
 										  tbinfo->notnull_constrs[j],
 										  fmtId(tbinfo->attnames[j]));
+
+					if (tbinfo->notnull_noinh[j])
+						appendPQExpBufferStr(q, " NO INHERIT");
 				}
 			}
 
@@ -18085,6 +18078,48 @@ getAttrName(int attrnum, const TableInfo *tblInfo)
 }
 
 /*
+ * appendIndexStatTargets
+ *	  append ALTER INDEX ... SET STATISTICS commands for the per-column
+ *	  statistics targets of an index (attstattarget), if any.
+ */
+static void
+appendIndexStatTargets(PQExpBuffer q, const IndxInfo *indxinfo)
+{
+	char	  **indstatcolsarray = NULL;
+	char	  **indstatvalsarray = NULL;
+	int			nstatcols = 0;
+	int			nstatvals = 0;
+
+	if (strlen(indxinfo->indstatcols) == 0 &&
+		strlen(indxinfo->indstatvals) == 0)
+		return;
+
+	if (!parsePGArray(indxinfo->indstatcols, &indstatcolsarray, &nstatcols))
+		pg_fatal("could not parse index statistic columns");
+	if (!parsePGArray(indxinfo->indstatvals, &indstatvalsarray, &nstatvals))
+		pg_fatal("could not parse index statistic values");
+	if (nstatcols != nstatvals)
+		pg_fatal("mismatched number of columns and values for index statistics");
+
+	for (int j = 0; j < nstatcols; j++)
+	{
+		appendPQExpBuffer(q, "ALTER INDEX %s ",
+						  fmtQualifiedDumpable(indxinfo));
+
+		/*
+		 * Note that this is a column number, so no quotes should be used.
+		 */
+		appendPQExpBuffer(q, "ALTER COLUMN %s ",
+						  indstatcolsarray[j]);
+		appendPQExpBuffer(q, "SET STATISTICS %s;\n",
+						  indstatvalsarray[j]);
+	}
+
+	free(indstatcolsarray);
+	free(indstatvalsarray);
+}
+
+/*
  * dumpIndex
  *	  write out to fout a user-defined index
  */
@@ -18118,13 +18153,6 @@ dumpIndex(Archive *fout, const IndxInfo *indxinfo)
 	 */
 	if (!is_constraint)
 	{
-		char	   *indstatcols = indxinfo->indstatcols;
-		char	   *indstatvals = indxinfo->indstatvals;
-		char	  **indstatcolsarray = NULL;
-		char	  **indstatvalsarray = NULL;
-		int			nstatcols = 0;
-		int			nstatvals = 0;
-
 		if (dopt->binary_upgrade)
 			binary_upgrade_set_pg_class_oids(fout, q,
 											 indxinfo->dobj.catId.oid);
@@ -18148,35 +18176,8 @@ dumpIndex(Archive *fout, const IndxInfo *indxinfo)
 							  qindxname);
 		}
 
-		/*
-		 * If the index has any statistics on some of its columns, generate
-		 * the associated ALTER INDEX queries.
-		 */
-		if (strlen(indstatcols) != 0 || strlen(indstatvals) != 0)
-		{
-			int			j;
-
-			if (!parsePGArray(indstatcols, &indstatcolsarray, &nstatcols))
-				pg_fatal("could not parse index statistic columns");
-			if (!parsePGArray(indstatvals, &indstatvalsarray, &nstatvals))
-				pg_fatal("could not parse index statistic values");
-			if (nstatcols != nstatvals)
-				pg_fatal("mismatched number of columns and values for index statistics");
-
-			for (j = 0; j < nstatcols; j++)
-			{
-				appendPQExpBuffer(q, "ALTER INDEX %s ", qqindxname);
-
-				/*
-				 * Note that this is a column number, so no quotes should be
-				 * used.
-				 */
-				appendPQExpBuffer(q, "ALTER COLUMN %s ",
-								  indstatcolsarray[j]);
-				appendPQExpBuffer(q, "SET STATISTICS %s;\n",
-								  indstatvalsarray[j]);
-			}
-		}
+		/* Per-column statistics targets, if any */
+		appendIndexStatTargets(q, indxinfo);
 
 		/* Indexes can depend on extensions */
 		append_depends_on_extension(fout, q, &indxinfo->dobj,
@@ -18215,9 +18216,6 @@ dumpIndex(Archive *fout, const IndxInfo *indxinfo)
 									  .section = SECTION_POST_DATA,
 									  .createStmt = q->data,
 									  .dropStmt = delq->data));
-
-		free(indstatcolsarray);
-		free(indstatvalsarray);
 	}
 
 	/* Dump Index Comments */
@@ -18423,7 +18421,7 @@ dumpConstraint(Archive *fout, const ConstraintInfo *coninfo)
 			appendPQExpBufferStr(q, " (");
 			for (k = 0; k < indxinfo->indnkeyattrs; k++)
 			{
-				int			indkey = (int) indxinfo->indkeys[k];
+				int			indkey = indxinfo->indkeys[k];
 				const char *attname;
 
 				if (indkey == InvalidAttrNumber)
@@ -18442,7 +18440,7 @@ dumpConstraint(Archive *fout, const ConstraintInfo *coninfo)
 
 			for (k = indxinfo->indnkeyattrs; k < indxinfo->indnattrs; k++)
 			{
-				int			indkey = (int) indxinfo->indkeys[k];
+				int			indkey = indxinfo->indkeys[k];
 				const char *attname;
 
 				if (indkey == InvalidAttrNumber)
@@ -18488,6 +18486,9 @@ dumpConstraint(Archive *fout, const ConstraintInfo *coninfo)
 			appendPQExpBuffer(q, " ON %s;\n",
 							  fmtId(indxinfo->dobj.name));
 		}
+
+		/* Per-column statistics targets, if any */
+		appendIndexStatTargets(q, indxinfo);
 
 		/* If the index defines identity, we need to record that. */
 		if (indxinfo->indisreplident)

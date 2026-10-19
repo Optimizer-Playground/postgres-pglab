@@ -72,6 +72,7 @@
 #include "postmaster/syslogger.h"
 #include "postmaster/walsummarizer.h"
 #include "postmaster/walwriter.h"
+#include "replication/logical.h"
 #include "replication/logicallauncher.h"
 #include "replication/slot.h"
 #include "replication/slotsync.h"
@@ -80,6 +81,7 @@
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/copydir.h"
+#include "storage/fd.h"
 #include "storage/io_worker.h"
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
@@ -488,6 +490,14 @@ static const struct config_enum_entry file_copy_method_options[] = {
 #if defined(HAVE_COPYFILE) && defined(COPYFILE_CLONE_FORCE) || defined(HAVE_COPY_FILE_RANGE)
 	{"clone", FILE_COPY_METHOD_CLONE, false},
 #endif
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry file_extend_method_options[] = {
+#ifdef HAVE_POSIX_FALLOCATE
+	{"posix_fallocate", FILE_EXTEND_METHOD_POSIX_FALLOCATE, false},
+#endif
+	{"write_zeros", FILE_EXTEND_METHOD_WRITE_ZEROS, false},
 	{NULL, 0, false}
 };
 
@@ -4974,6 +4984,18 @@ struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"output_plugin_libraries", PGC_SUSET, REPLICATION_SENDING,
+			gettext_noop("Lists libraries that may be named as logical decoding output plugins."),
+			gettext_noop("Users with REPLICATION privileges may only use plugins in this list when creating logical replication slots."),
+			/* note: src/bin/pg_upgrade/check.c assumes GUC_LIST_QUOTE here */
+			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY
+		},
+		&output_plugin_libraries_string,
+		"pgoutput, test_decoding",
+		NULL, NULL, NULL
+	},
+
+	{
 		{"log_connections", PGC_SU_BACKEND, LOGGING_WHAT,
 			gettext_noop("Logs specified aspects of connection establishment and setup."),
 			NULL,
@@ -5261,6 +5283,16 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&file_copy_method,
 		FILE_COPY_METHOD_COPY, file_copy_method_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"file_extend_method", PGC_SIGHUP, RESOURCES_DISK,
+			gettext_noop("Selects the method used for extending data files."),
+			NULL
+		},
+		&file_extend_method,
+		DEFAULT_FILE_EXTEND_METHOD, file_extend_method_options,
 		NULL, NULL, NULL
 	},
 

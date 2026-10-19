@@ -1578,9 +1578,6 @@ WALRead(XLogReaderState *state,
 
 #ifndef FRONTEND
 		pgstat_report_wait_end();
-
-		pgstat_count_io_op_time(IOOBJECT_WAL, IOCONTEXT_NORMAL, IOOP_READ,
-								io_start, 1, readbytes);
 #endif
 
 		if (readbytes <= 0)
@@ -1592,6 +1589,11 @@ WALRead(XLogReaderState *state,
 			errinfo->wre_seg = state->seg;
 			return false;
 		}
+
+#ifndef FRONTEND
+		pgstat_count_io_op_time(IOOBJECT_WAL, IOCONTEXT_NORMAL, IOOP_READ,
+								io_start, 1, readbytes);
+#endif
 
 		/* Update state for read */
 		recptr += readbytes;
@@ -1879,7 +1881,7 @@ DecodeXLogRecord(XLogReaderState *state,
 				{
 					report_invalid_record(state,
 										  "neither BKPIMAGE_HAS_HOLE nor BKPIMAGE_COMPRESSED set, but block image length is %u at %X/%X",
-										  (unsigned int) blk->data_len,
+										  (unsigned int) blk->bimg_len,
 										  LSN_FORMAT_ARGS(state->ReadRecPtr));
 					goto err;
 				}
