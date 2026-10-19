@@ -197,6 +197,9 @@ cost_gather_merge_hook_type     cost_gather_merge_hook = NULL;
 set_baserel_size_estimates_hook_type    set_baserel_size_estimates_hook = NULL;
 set_joinrel_size_estimates_hook_type    set_joinrel_size_estimates_hook = NULL;
 
+get_parameterized_baserel_size_hook_type	get_parameterized_baserel_size_hook = NULL;
+get_parameterized_joinrel_size_hook_type	get_parameterized_joinrel_size_hook = NULL;
+
 
 typedef struct
 {
@@ -5982,6 +5985,32 @@ double
 get_parameterized_baserel_size(PlannerInfo *root, RelOptInfo *rel,
 							   List *param_clauses)
 {
+	double nrows;
+
+	if (get_parameterized_baserel_size_hook)
+	{
+		nrows = (*get_parameterized_baserel_size_hook) (root, rel, param_clauses);
+	}
+	else
+	{
+		nrows = standard_get_parameterized_baserel_size(root, rel, param_clauses);
+	}
+
+	return nrows;
+}
+
+
+/*
+ * standard_get_parameterized_baserel_size
+ *		Make a size estimate for a parameterized scan of a base relation.
+ *
+ *
+ * See get_parameterized_baserel_size for a description of the parameters.
+ */
+double
+standard_get_parameterized_baserel_size(PlannerInfo *root, RelOptInfo *rel,
+							   			List *param_clauses)
+{
 	List	   *allclauses;
 	double		nrows;
 
@@ -6096,6 +6125,38 @@ get_parameterized_joinrel_size(PlannerInfo *root, RelOptInfo *rel,
 							   Path *inner_path,
 							   SpecialJoinInfo *sjinfo,
 							   List *restrict_clauses)
+{
+	double nrows;
+
+	if (get_parameterized_joinrel_size_hook)
+	{
+		nrows = (*get_parameterized_joinrel_size_hook) (root, rel, outer_path,
+														inner_path, sjinfo,
+														restrict_clauses);
+	}
+	else
+	{
+		nrows = standard_get_parameterized_joinrel_size(root, rel, outer_path,
+														inner_path, sjinfo,
+														restrict_clauses);
+	}
+
+	return nrows;
+}
+
+
+/*
+ * standard_get_parameterized_joinrel_size
+ *		Make a size estimate for a parameterized scan of a join relation.
+ *
+ * See get_parameterized_joinrel_size for a description of the parameters.
+ */
+double
+standard_get_parameterized_joinrel_size(PlannerInfo *root, RelOptInfo *rel,
+							   			Path *outer_path,
+										Path *inner_path,
+							   			SpecialJoinInfo *sjinfo,
+										List *restrict_clauses)
 {
 	double		nrows;
 

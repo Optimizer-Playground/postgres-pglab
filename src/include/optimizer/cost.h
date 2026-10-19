@@ -82,6 +82,18 @@ typedef double (*set_joinrel_size_estimates_hook_type) (PlannerInfo *root, RelOp
 														SpecialJoinInfo *sjinfo, List *restrictlist);
 extern PGDLLIMPORT set_joinrel_size_estimates_hook_type set_joinrel_size_estimates_hook;
 
+/* Hook for plugins to provide own cardinality estimates for parameterized base rels */
+typedef double (*get_parameterized_baserel_size_hook_type) (PlannerInfo *root,
+															RelOptInfo *rel,
+															List *param_clauses);
+extern PGDLLIMPORT get_parameterized_baserel_size_hook_type get_parameterized_baserel_size_hook;
+
+/* Hook for plugins to provide own cardinality estimates for parameterized join rels */
+typedef double (*get_parameterized_joinrel_size_hook_type) (PlannerInfo *root, RelOptInfo *rel,
+														    Path *outer_path, Path *inner_path,
+														    SpecialJoinInfo *sjinfo, List *restrict_clauses);
+extern PGDLLIMPORT get_parameterized_joinrel_size_hook_type get_parameterized_joinrel_size_hook;
+
 
 /* Hooks for cost estimation functions */
 typedef void (*cost_seqscan_hook_type) (Path *path, PlannerInfo *root, RelOptInfo *baserel,
@@ -377,6 +389,15 @@ extern double standard_set_joinrel_size_estimates(PlannerInfo *root, RelOptInfo 
 												  RelOptInfo *inner_rel,
 												  SpecialJoinInfo *sjinfo,
 												  List *restrictlist);
+extern double standard_get_parameterized_baserel_size(PlannerInfo* root,
+													  RelOptInfo *rel,
+													  List *param_clauses);
+extern double standard_get_parameterized_joinrel_size(PlannerInfo *root,
+											 		  RelOptInfo *rel,
+													  Path *outer_path,
+													  Path *inner_path,
+													  SpecialJoinInfo *sjinfo,
+													  List *restrict_clauses);
 
 /* Prototypes of default cost estimation functions */
 extern void standard_cost_seqscan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
